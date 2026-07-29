@@ -28,7 +28,7 @@ The two halves are designed to compose: AI takes the exam, the same pipeline gra
 
 ## Related repos
 
-- `ai-teaching-lab/exam-tools` — generates the questions this pipeline answers and grades.
+- `pennai-law/exam-tools` — generates the questions this pipeline answers and grades.
 - `Box: AI Teaching Lab/workstreams/02-essay-grader/` — workstream home (notes, partners, drafts).
 
 ## Setup
