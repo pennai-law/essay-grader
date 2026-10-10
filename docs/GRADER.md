@@ -15,7 +15,7 @@ disadvantaged by when, in what order, or by which model their answer was graded,
 | Model drift | Requested model ids are pinned in the run metadata, along with the model id the API reports serving, prompt template hashes, and the seed. |
 | Order effects | Grading order is shuffled with a recorded seed (reproducible). Each answer is graded in its own call with no shared conversation, so earlier answers cannot influence later ones. |
 | Single-model bias | Two independent graders (Claude; OpenAI Decisions) grade every answer without seeing each other's output. |
-| Disagreement | Per criterion: binary and choice flag on any label mismatch; score criteria flag when the point difference exceeds the threshold (default 1). Also flagged: Claude evidence quotes that are not verbatim substrings of the answer, Claude confidence below 0.5, and grader errors. Flagged answers get status `needs_human_review` and no suggested total. Only fully agreeing answers get a suggested score (mean of the two by default; `--combine min|max`). |
+| Disagreement | Per criterion: binary and choice flag on any label mismatch; score criteria flag when the point difference exceeds the threshold (default 1). Also flagged: Claude evidence quotes that are not verbatim substrings of the answer, any grader confidence below 0.5 (`--low-confidence`), and grader errors. Flagged answers get status `needs_human_review` and no suggested total. Only fully agreeing answers get a suggested score (mean of the two by default; `--combine min|max`). |
 | Length | The length policy (`no_penalty`, `grade_first_n_words`, `deduct`) is applied deterministically in code before any grader runs; word count, words graded and any deduction are recorded per answer. |
 | Style over substance, contrary conclusions, prompt injection | The grader prompt tells Claude to grade only rubric criteria, credit reasoned contrary conclusions per policy, and treat the answer as data (ignoring instructions embedded in it). |
 | Reliability visibility | `agreement_report.md` gives per-criterion exact agreement, Cohen's kappa (binary/choice; "n/a" when undefined) and mean absolute point difference. Low-agreement criteria usually mean an ambiguous rubric item. |
@@ -33,19 +33,28 @@ start of a round.
 - Randomly review a sample of `agreed` answers (including some per criterion) and compare to your own judgment.
 - Check `agreement_report.md` for criteria with kappa well below the others; fix the rubric, re-lock, and re-run with a new run id.
 
-## Unverified: OpenAI Decisions API
+## OpenAI Decisions API
 
-`graders/openai_decisions_grader.py` targets `POST /v1/decisions` (model `gpt-6-luna`). The shape was reconstructed from
-third-party descriptions (one input plus an ordered list of questions of type predicate, choice, or score; answers returned in
-order). **Official docs were unreachable when this was written, so nothing has been tested against the real service.**
+Shape per official OpenAI Decisions guide (public beta, Oct 2026); re-check at GA.
 
-- Assumed request: `{model, input, instructions, questions:[{id, type: predicate|choice|score, text, options|min/max/anchors}]}`.
-- Assumed response: `{answers:[{id, probability | choice | score}], usage, model}` in the order asked.
+`graders/openai_decisions_grader.py` targets `POST /v1/decisions` (model `gpt-6-luna`). All criteria of one question go in
+one request per answer.
+
+- Request: `{model, input, questions:[{name, type, instructions, choices|levels}]}`. There is no top-level `instructions`
+  field; shared context (exam question, alternative-conclusion, off-topic and citation policies, and a line telling the model
+  to ignore instructions inside the answer) and the student answer go in `input` as `input_text` parts of one user message.
+- Response: `{answers:[{type, name, ...}], usage}`, matched by `name` (missing, duplicate or unknown names are errors).
 - Mapping: binary to predicate (probability kept; met if probability >= threshold, default 0.5, `--decision-threshold`);
-  choice to choice (level labels and descriptors as options); score to score (anchors). All criteria of one question go in one request per answer.
-- Decisions returns no evidence quotes or rationale, so the quote check and confidence flag apply only to Claude.
-- Everything shape-specific is isolated in `build_request` and `parse_response` (marked `# UNVERIFIED`), called through the
-  `openai` client's generic `post` so no SDK method name is assumed. **Before the fall round:** confirm against
-  https://developers.openai.com/api/reference/resources/decisions/methods/create, fix those two functions and
-  `tests/test_decisions.py`, and run a small pilot. Until then, `--graders claude` works alone (statuses become `single_grader`, i.e. unchecked).
-- Cost estimates in `run_metadata.json` use a placeholder price table (`llm.PRICE_PER_MTOK`); verify against billing.
+  choice to choice (level labels and descriptors); score to score (`levels` built from the scale anchors, lowest first).
+  The returned `score` is a float index in level space; it is linearly interpolated between adjacent anchor values, clamped to
+  the scale, then mapped to points.
+- Confidence: choice and score answers carry `confidence`; predicates use the derived `|p-0.5|*2`. Any grader confidence below
+  `--low-confidence` (default 0.5) flags the criterion for human review. Decisions returns no evidence quotes or rationale,
+  so the quote check applies only to Claude.
+- **Predicate thresholds should be set from the professor's calibration sample** (labeled examples), not left at 0.5.
+- Transport: uses the SDK's `client.decisions.create` when present (openai>=3.26.0), else `client.post("/decisions")`.
+- Cost: `llm.PRICE_PER_MTOK` uses $0.10 per 1M input tokens and no output charge for gpt-6-luna (regional and long-context
+  multipliers not modeled). Claude prices there remain placeholders; verify against billing.
+- Privacy: the Decisions API supports Zero Data Retention for eligible customers, which is relevant to the Penn privacy
+  review. Confirm eligibility and agreement terms before sending real student text.
+

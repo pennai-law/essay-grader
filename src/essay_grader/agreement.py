@@ -12,7 +12,7 @@ from .rubric import Question, Rubric
 @dataclass
 class AgreementConfig:
     disagreement_threshold: float = 1.0  # points; score criteria flag when |diff| > this
-    low_confidence: float = 0.5  # Claude confidence below this flags the criterion
+    low_confidence: float = 0.5  # any grader's confidence below this flags the criterion
     combine: str = "mean"  # mean | min | max
 
 
@@ -56,7 +56,7 @@ def evaluate(question: Question, results: dict[str, GraderResult], cfg: Agreemen
         for n, x in g.items():
             if x.invalid_quotes:
                 cflags.append(f"invalid_quotes:{n}")
-            if x.confidence is not None and n == "claude" and x.confidence < cfg.low_confidence:
+            if x.confidence is not None and x.confidence < cfg.low_confidence:
                 cflags.append(f"low_confidence:{n}")
         suggested = None
         if len(g) >= 2 and "disagree" not in cflags:

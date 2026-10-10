@@ -11,12 +11,14 @@ from pydantic import BaseModel, ValidationError
 DEFAULT_CLAUDE_MODEL = "claude-opus-5-5"
 T = TypeVar("T")
 
-# ESTIMATES ONLY, USD per million tokens (input, output). Placeholders: update from the provider's
-# price page before relying on cost figures. Unknown models report cost as null.
+# ESTIMATES ONLY, USD per million tokens (input, output). Claude prices are PLACEHOLDERS: update from the
+# provider's price page before relying on cost figures. Unknown models report cost as null.
 PRICE_PER_MTOK: dict[str, tuple[float, float]] = {
     "claude-opus-5-5": (5.0, 25.0),
     "claude-sonnet-5-5": (3.0, 15.0),
-    "gpt-6-luna": (1.0, 4.0),
+    # gpt-6-luna: official OpenAI Decisions guide: $0.10 per 1M input tokens, no output/cache charges.
+    # Regional and long-context multipliers are not modeled.
+    "gpt-6-luna": (0.10, 0.0),
 }
 CACHE_READ_FACTOR = 0.1
 CACHE_WRITE_FACTOR = 1.25

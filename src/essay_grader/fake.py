@@ -78,16 +78,27 @@ class FakeLLM:
 
 
 async def fake_decisions_transport(path: str, body: dict) -> dict:
-    """Mimics the *assumed* Decisions response shape (see openai_decisions_grader.py)."""
-    q = quality(body["input"])
+    """Mimics the Decisions response shape (see openai_decisions_grader.py). Answers are returned reversed to exercise name matching."""
+    text = body["input"][0]["content"][-1]["text"]
+    q = quality(text)
     answers = []
     for qq in body["questions"]:
-        noise = _u(body["input"], "o" + qq["id"]) - 0.5
+        name = qq["name"]
+        noise = _u(text, "o" + name) - 0.5
+        conf = round(0.4 + 0.6 * _u(text, "c" + name), 3)
         if qq["type"] == "predicate":
-            answers.append({"id": qq["id"], "probability": min(1, max(0, q + 0.4 * noise))})
+            answers.append({"type": "predicate", "name": name, "probability": min(1, max(0, q + 0.4 * noise))})
         elif qq["type"] == "choice":
-            opts = qq["options"]
-            answers.append({"id": qq["id"], "choice": opts[min(len(opts) - 1, max(0, round((q + 0.5 * noise) * (len(opts) - 1))))]["value"]})
+            opts = qq["choices"]
+            k = min(len(opts) - 1, max(0, round((q + 0.5 * noise) * (len(opts) - 1))))
+            answers.append({"type": "choice", "name": name, "choice": opts[k]["value"], "confidence": conf,
+                            "probabilities": [{"value": o["value"], "probability": 1.0 if i == k else 0.0}
+                                              for i, o in enumerate(opts)]})
         else:
-            answers.append({"id": qq["id"], "score": round((qq["min"] + min(1, max(0, q + 0.3 * noise)) * (qq["max"] - qq["min"])) * 2) / 2})
-    return {"id": "fake", "model": body["model"], "answers": answers, "usage": {"input_tokens": 80, "output_tokens": 20}}
+            lv = qq["levels"]
+            idx = round(min(1, max(0, q + 0.3 * noise)) * (len(lv) - 1) * 2) / 2
+            k = min(len(lv) - 1, round(idx))
+            answers.append({"type": "score", "name": name, "score": idx, "confidence": conf,
+                            "probabilities": [{"value": i, "label": l["label"], "probability": 1.0 if i == k else 0.0}
+                                              for i, l in enumerate(lv)]})
+    return {"id": "fake", "model": body["model"], "answers": answers[::-1], "usage": {"input_tokens": 80}}

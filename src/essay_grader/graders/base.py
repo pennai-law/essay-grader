@@ -17,6 +17,7 @@ class CriterionGrade(BaseModel):
     evidence: list[str] = Field(default_factory=list)
     rationale: str = ""
     confidence: float | None = None
+    probabilities: list[dict] | None = None  # Decisions choice/score per-level probabilities
     invalid_quotes: list[str] = Field(default_factory=list)
 
     @property

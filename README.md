@@ -67,7 +67,7 @@ Python 3.11+. Environment variables:
 | `OPENAI_API_KEY` | OpenAI Decisions grader (optional `OPENAI_BASE_URL`) |
 
 Defaults: Claude `claude-opus-5-5` (override with `--model`, e.g. `claude-sonnet-5-5`); Decisions `gpt-6-luna`.
-**The OpenAI Decisions request/response shape is unverified**; see the caveat in [docs/GRADER.md](docs/GRADER.md).
+The OpenAI Decisions adapter follows the official guide (public beta, Oct 2026; re-check at GA); see [docs/GRADER.md](docs/GRADER.md).
 
 ## Data handling rules (FERPA)
 
@@ -80,4 +80,5 @@ Defaults: Claude `claude-opus-5-5` (override with `--model`, e.g. `claude-sonnet
 ## Related repos
 
 - `pennai-law/exam-tools`: generates the questions this pipeline answers and grades.
+- `pennai-law/practice-sim`: the practice simulation; its design lives there and will reuse this rubric format and grading engine.
 - `Box: PCL AI Project/workstreams/02-essay-grader/`: workstream home (notes, partners, drafts).
