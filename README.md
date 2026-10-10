@@ -85,6 +85,12 @@ The filename stem is the only identifier; use pseudonymous IDs, never names.
 See `examples/draft_rubric.yaml`. Criteria are `binary`, `choice` (levels with descriptors), or `score` (scale with anchors);
 rubric-level `policies` cover length, off-topic material, alternative conclusions, and citations.
 
+## Citation checking
+
+`essay-grader citations check memo.txt [--expected expected.yaml]` extracts citations (eyecite) and checks case cites against CourtListener
+(`COURTLISTENER_API_TOKEN`); `grade --check-citations` adds `fabricated_suspect` as a human-review reason without changing any points.
+Statutes are extracted only. See [docs/CITATIONS.md](docs/CITATIONS.md) for what is and is not verified and false-positive risks.
+
 ## Setup
 
 ```bash
@@ -98,6 +104,7 @@ Python 3.11+. Environment variables:
 | Variable | Used for |
 |---|---|
 | `ANTHROPIC_API_KEY` | Claude grader, hardening, calibration (structured outputs; server-side fallback beta `server-side-fallback-2026-07-01`) |
+| `COURTLISTENER_API_TOKEN` | Citation verification (optional; without it cites are reported `unverifiable`) |
 | `OPENAI_API_KEY` | OpenAI Decisions grader (optional `OPENAI_BASE_URL`) |
 
 Defaults: Claude `claude-opus-5-5` (override with `--model`, e.g. `claude-sonnet-5-5`; hardening uses Sonnet for bulk generation and stress grading regardless); Decisions `gpt-6-luna`.
@@ -116,3 +123,22 @@ The OpenAI Decisions adapter follows the official guide (public beta, Oct 2026; 
 - `pennai-law/exam-tools`: generates the questions this pipeline answers and grades.
 - `pennai-law/practice-sim`: the practice simulation; its design lives there and will reuse this rubric format and grading engine.
 - `Box: PCL AI Project/workstreams/02-essay-grader/`: workstream home (notes, partners, drafts).
+
+## Study mode: the AI takes the exam
+
+`essay-grader study ...` is the "AI takes the exam" half: a code version of exam-taker's Wave 1 protocol (isolated cells per
+component x arm x model, verbatim capture, automated audit, recorded revision, Examplify-format packaging, methodology record,
+scoring-return analysis). Wave 2 default: syllabus-only arm `S` next to `A` (no materials) and `B` (with materials).
+
+```bash
+essay-grader study validate design.yaml
+essay-grader study check-materials design.yaml          # naivety scan; blocks `run` on hits
+essay-grader study run design.yaml --budget-usd 10 [--dry-run]
+essay-grader study audit design.yaml && essay-grader study revise design.yaml
+essay-grader study package design.yaml                  # PDFs need xelatex; MCQ workbook uses openpyxl
+essay-grader study ingest-scores design.yaml --scores faculty.csv && essay-grader study report design.yaml
+```
+
+Prompt templates live in a protocol directory given by path (never commit Penn exam content); a fictional example is under
+`tests/fixtures/study/`. Outputs go to `runs/study/` (git-ignored). Needs `OPENAI_API_KEY` for OpenAI cells. See
+[docs/STUDY.md](docs/STUDY.md) for the workflow, what stays human, fidelity gaps against the Wave 1 tooling, and what to verify live.

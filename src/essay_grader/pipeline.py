@@ -6,6 +6,7 @@ import csv
 import json
 import random
 from dataclasses import dataclass, field
+from typing import Callable
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -28,6 +29,11 @@ class GradeConfig:
     agreement: AgreementConfig = field(default_factory=AgreementConfig)
     exclude_calibration: bool = False
     dry_run: bool = False
+    # Optional citation verification (off by default). Adds a `citations` report to each result and a review reason
+    # when a citation looks fabricated. It NEVER changes points or suggested totals; the professor decides.
+    check_citations: bool = False
+    citation_checker: Callable[[str], object] | None = None  # default: essay_grader.citations.check
+    expected_authorities: list | None = None  # instructor list for expected-authorities matching
 
     @property
     def run_dir(self) -> Path:
@@ -61,6 +67,20 @@ async def _safe_grade(g: Grader, rubric: Rubric, qid: str, exam: str, text: str,
         raise  # not a grader error: the pipeline stops cleanly and the answer stays pending
     except Exception as e:  # recorded, never raised: a failed grader sends the answer to human review
         return GraderResult(grader=g.name, model=g.model, question_id=qid, error=f"{type(e).__name__}: {e}"[:500])
+
+
+async def _citations(text: str, cfg: GradeConfig):
+    """Run the (blocking, possibly networked) citation check off the event loop. A failure here must not lose the
+    grades: on failure return the error string; the record gets `citations_error` and no `citations`."""
+    from . import citations
+
+    fn = cfg.citation_checker
+    try:
+        if fn is not None:
+            return await asyncio.to_thread(fn, text)
+        return await asyncio.to_thread(lambda: citations.check(text, expected=cfg.expected_authorities))
+    except Exception as e:
+        return f"{type(e).__name__}: {e}"[:300]
 
 
 def _check_metadata(path: Path, rubric: Rubric, graders: list[Grader], cfg: GradeConfig) -> dict | None:
@@ -163,11 +183,24 @@ async def run_pipeline(rubric: Rubric, exam_text: str, answers: list[Answer], gr
             ev = evaluate(rubric.question(a.question_id), results, cfg.agreement)
             if ev["suggested_total"] is not None:
                 ev["suggested_total"] = max(0.0, ev["suggested_total"] - info["deduction"])
+            citation_report, cite_error = None, None
+            if cfg.check_citations:
+                citation_report = await _citations(a.text, cfg)
+                if isinstance(citation_report, str):
+                    cite_error, citation_report = citation_report, None
+                if citation_report is not None and citation_report.fabricated_suspects:
+                    # review reason only: points, criteria and suggested_total are left exactly as graded
+                    ev["flags"] = [*ev["flags"], "citation:fabricated_suspect"]
+                    ev["status"] = "needs_human_review"
             rec = {"student_id": a.student_id, "question_id": a.question_id, "source": a.source, "order_index": idx,
                    "words": info["words"], "words_graded": info["words_graded"], "truncated": info["truncated"],
                    "length_deduction": info["deduction"], "warnings": a.warnings,
                    "calibration_sample": a.student_id in calib,
                    "results": {n: r.model_dump() for n, r in results.items()}, **ev}
+            if citation_report is not None:
+                rec["citations"] = citation_report.to_dict()
+            elif cite_error:
+                rec["citations_error"] = cite_error
             async with wlock:
                 fh.write(json.dumps(rec) + "\n")
                 fh.flush()

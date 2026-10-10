@@ -108,6 +108,14 @@ def cmd_calibrate(args) -> int:
     return 0
 
 
+def _load_expected(path):
+    if not path:
+        return None
+    from .citations import load_expected
+
+    return load_expected(path)
+
+
 def cmd_grade(args) -> int:
     from .pipeline import GradeConfig, run_pipeline
 
@@ -131,6 +139,8 @@ def cmd_grade(args) -> int:
             print(f"WARNING {a.source}: {w}", file=sys.stderr)
     cfg = GradeConfig(out_dir=Path(args.out), seed=args.seed, concurrency=args.concurrency,
                       exclude_calibration=args.exclude_calibration, dry_run=args.dry_run,
+                      check_citations=args.check_citations,
+                      expected_authorities=_load_expected(args.expected_authorities),
                       agreement=AgreementConfig(args.disagreement_threshold, args.low_confidence, args.combine))
     if args.run_id:
         cfg.run_id = args.run_id
@@ -147,6 +157,23 @@ def cmd_grade(args) -> int:
         return 5
     print(f"Run complete: {d} (spent ${budget.spent_usd:.2f})\nSuggestions only; see review_queue.csv and agreement_report.md.")
     return 0
+
+
+def cmd_citations_check(args) -> int:
+    from . import citations
+
+    text = extract_text(args.file)
+    client = citations.CourtListenerClient(cache=citations.LookupCache(args.cache) if args.cache else None)
+    expected = citations.load_expected(args.expected) if args.expected else None
+    rep = citations.check(text, client=client, expected=expected)
+    md = rep.to_markdown(title=f"Citation check: {Path(args.file).name}")
+    if args.out:
+        Path(args.out).write_text(md, encoding="utf-8")
+        Path(args.out).with_suffix(".json").write_text(json.dumps(rep.to_dict(), indent=2), encoding="utf-8")
+        print(f"Report: {args.out} (+ .json)")
+    else:
+        print(md)
+    return 6 if rep.fabricated_suspects and args.fail_on_suspect else 0
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -212,6 +239,22 @@ def build_parser() -> argparse.ArgumentParser:
     g.add_argument("--combine", choices=["mean", "min", "max"], default="mean")
     g.add_argument("--exclude-calibration", action="store_true")
     g.set_defaults(func=cmd_grade)
+
+    ci = sub.add_parser("citations", help="extract and verify legal citations (CourtListener); statutes are extracted only")
+    ci_sub = ci.add_subparsers(dest="citations_cmd", required=True)
+    cc = ci_sub.add_parser("check", help="check the citations in a text/pdf/docx file")
+    cc.add_argument("file")
+    cc.add_argument("--expected", help="expected.yaml: instructor list of authorities (names or cites)")
+    cc.add_argument("--out", help="write the markdown report here (and JSON beside it); default prints markdown")
+    cc.add_argument("--cache", help="sqlite cache path (default ~/.cache/essay_grader/citations.sqlite or $ESSAY_GRADER_CACHE)")
+    cc.add_argument("--fail-on-suspect", action="store_true", help="exit 6 if any citation is fabricated_suspect")
+    cc.set_defaults(func=cmd_citations_check)
+    g.add_argument("--check-citations", action="store_true", help="verify citations in each answer (adds review reasons only)")
+    g.add_argument("--expected-authorities", help="expected.yaml for --check-citations")
+
+    from .study.cli import add_study_parser  # "AI takes the exam" subcommand group; see docs/STUDY.md
+
+    add_study_parser(sub)
     return p
 
 
