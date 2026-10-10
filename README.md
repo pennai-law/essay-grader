@@ -1,36 +1,83 @@
 # essay-grader
 
-AI-as-test-subject and AI-as-grader pipeline for law school exams.
+AI-as-test-subject and AI-as-grader pipeline for law school exams (Penn Carey Law AI lab).
+
+This package implements the **grader** half: a rubric-locked, dual-grader pipeline (Claude + OpenAI Decisions) that
+produces *suggested* scores and a human review queue for professors grading real student essay exams.
+**AI never finalizes a grade.** See [docs/GRADER.md](docs/GRADER.md) for the fairness design.
 
 ## Owner
 
 Tulio ([VERIFY: full attribution])
 
-## Status
+## What it does
 
-🚧 **Stub.** v1 pipeline exists in Polk's personal workspace (`~/code/exam-grader`, `~/code/essay-dry-run`). This repo will be the consolidated, lab-owned version.
+1. **Hardens** a draft rubric before any student exam is seen (critique, adversarial synthetic answers, repeated stress grading).
+2. **Locks** the rubric with a sha256 content hash; graders refuse unlocked or edited rubrics.
+3. Optionally **calibrates** on a small anonymized sample, producing a new rubric version that must be re-locked.
+4. **Grades** every answer with two independent graders (Claude and OpenAI Decisions), in randomized order, with a
+   deterministic length policy applied first.
+5. **Flags** disagreement, unverifiable evidence quotes, and low confidence; those answers go to a human review queue.
 
-## What this is
+## Workflow
 
-A unified pipeline that:
+```
+harden  ->  (professor edits draft)  ->  lock  ->  [calibrate  ->  (edit)  ->  lock]  ->  grade  ->  human review
+```
 
-1. **Takes exams as a subject.** Feeds law school exam questions to AI models (Claude primarily) under controlled conditions. Captures answers, timing, and meta-information.
-2. **Grades essays as a grader.** Applies rubrics to student or AI-generated answers. Produces structured scores, feedback, and reliability metrics.
+```bash
+essay-grader harden --exam exam.pdf --syllabus syllabus.pdf --rubric draft.yaml --out runs/
+#   read runs/harden-*/harden_report.md, edit draft.yaml
+essay-grader lock draft.yaml                       # writes draft.locked.yaml (rubric.yaml -> rubric.locked.yaml)
+essay-grader calibrate --rubric rubric.locked.yaml --sample samples/ --exam exam.pdf   # optional; writes a NEW unlocked version
+essay-grader lock runs/calibration/rubric.v2.yaml  # re-lock before grading
+essay-grader grade --rubric rubric.locked.yaml --answers answers/ --exam exam.pdf [--graders claude,openai] [--dry-run]
+```
 
-The two halves are designed to compose: AI takes the exam, the same pipeline grades the resulting answers, we compare against human grading on the same materials.
+`--dry-run` uses canned offline fakes for every API (no keys, no network, meaningless scores); use it to check file layout and outputs.
+Re-running `grade` with the same `--run-id` resumes: finished answers are skipped, answers with grader errors are retried.
+A run refuses to resume if the rubric hash, seed, or grader models changed.
 
-## What's planned (Summer 2026)
+Outputs go to `runs/<run_id>/`: `results.jsonl` (everything), `scores.csv` (one row per student), `review_queue.csv`,
+`agreement_report.md`, `run_metadata.json` (rubric hash, pinned model ids, prompt hashes, seed, timestamps, tokens, estimated cost).
 
-- Consolidate v1 code from `~/code/exam-grader` and `~/code/essay-dry-run` into this repo.
-- Write up the v1 pipeline: architecture, prompts, results to date.
-- Plan and start v2 (wave 2 partner schools).
-- Develop a faculty survey instrument for participating professors.
+### Answer files
 
-## Related repos
+`answers/<pseudonymous_id>.txt|md|pdf|docx`. For multi-question rubrics name files `<id>__<question_id>.<ext>`.
+The filename stem is the only identifier; use pseudonymous IDs, never names.
 
-- `pennai-law/exam-tools` — generates the questions this pipeline answers and grades.
-- `Box: PCL AI Project/workstreams/02-essay-grader/` — workstream home (notes, partners, drafts).
+### Rubric format
+
+See `examples/draft_rubric.yaml`. Criteria are `binary`, `choice` (levels with descriptors), or `score` (scale with anchors);
+rubric-level `policies` cover length, off-topic material, alternative conclusions, and citations.
 
 ## Setup
 
-(To be filled in when v1 lands here.)
+```bash
+python -m venv .venv && source .venv/bin/activate
+pip install -e '.[dev]'
+python -m pytest -q          # fully offline
+```
+
+Python 3.11+. Environment variables:
+
+| Variable | Used for |
+|---|---|
+| `ANTHROPIC_API_KEY` | Claude grader, hardening, calibration |
+| `OPENAI_API_KEY` | OpenAI Decisions grader (optional `OPENAI_BASE_URL`) |
+
+Defaults: Claude `claude-opus-5-5` (override with `--model`, e.g. `claude-sonnet-5-5`); Decisions `gpt-6-luna`.
+**The OpenAI Decisions request/response shape is unverified**; see the caveat in [docs/GRADER.md](docs/GRADER.md).
+
+## Data handling rules (FERPA)
+
+- Pseudonymous IDs only. Never put student names in filenames or file contents; the pipeline only warns on name-like headers and does not scrub.
+- Never commit student data. `data/`, `runs/`, `samples/`, `answers/`, `*.pdf`, `*.docx` are git-ignored; keep it that way.
+- Student text is sent to third-party APIs (Anthropic, OpenAI). Confirm the institution's agreements/zero-retention terms cover this before using real data.
+- Run outputs contain student text (evidence quotes). Store them in approved storage, not in the repo.
+- Only synthetic or fictional text belongs in `tests/` and `examples/`.
+
+## Related repos
+
+- `pennai-law/exam-tools`: generates the questions this pipeline answers and grades.
+- `Box: PCL AI Project/workstreams/02-essay-grader/`: workstream home (notes, partners, drafts).
