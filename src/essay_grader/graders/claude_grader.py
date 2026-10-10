@@ -5,7 +5,7 @@ import re
 
 from pydantic import BaseModel, Field
 
-from ..llm import DEFAULT_CLAUDE_MODEL, StructuredLLM, with_retries
+from ..llm import StructuredLLM, estimate_cost, with_retries
 from ..prompts import GRADER_SYSTEM, GRADER_USER, render_question
 from ..rubric import Question, Rubric
 from .base import CriterionGrade, GraderResult
@@ -48,27 +48,50 @@ def validate_quotes(answer: str, quotes: list[str]) -> list[str]:
     return bad
 
 
+GRADE_MAX_TOKENS = 4096
+EXPECTED_GRADE_OUTPUT_TOKENS = 1500  # typical output size, used for whole-run estimates (per-call gates use max_tokens)
+
+
 class ClaudeGrader:
     name = "claude"
 
-    def __init__(self, llm: StructuredLLM, *, allow_draft: bool = False, retry_delay: float = 1.0):
-        self.llm, self.allow_draft, self.retry_delay = llm, allow_draft, retry_delay
+    def __init__(self, llm: StructuredLLM, *, allow_draft: bool = False, retry_delay: float = 1.0,
+                 purpose: str = "grade-claude"):
+        self.llm, self.allow_draft, self.retry_delay, self.purpose = llm, allow_draft, retry_delay, purpose
 
     @property
     def model(self) -> str:
         return self.llm.model
 
-    async def grade(self, rubric: Rubric, question: Question, exam_text: str, answer_text: str) -> GraderResult:
+    def with_model(self, model: str) -> "ClaudeGrader":
+        return ClaudeGrader(self.llm.with_model(model), allow_draft=self.allow_draft, retry_delay=self.retry_delay,
+                            purpose=self.purpose)
+
+    def _prompts(self, rubric: Rubric, question: Question, exam_text: str, answer_text: str) -> tuple[str, str]:
+        prefix = GRADER_SYSTEM.format(exam=exam_text, question_id=question.id, rubric=render_question(rubric, question))
+        return prefix, GRADER_USER.format(answer=answer_text)
+
+    def estimate_cost(self, rubric: Rubric, question: Question, exam_text: str, answer_text: str, *,
+                      worst_case: bool = False) -> float:
+        """USD for one answer: input chars/4 plus typical (or, if worst_case, max) output tokens."""
+        prefix, user = self._prompts(rubric, question, exam_text, answer_text)
+        return estimate_cost(self.model, len(prefix) + len(user),
+                             GRADE_MAX_TOKENS if worst_case else EXPECTED_GRADE_OUTPUT_TOKENS)
+
+    async def grade(self, rubric: Rubric, question: Question, exam_text: str, answer_text: str, *,
+                    budget=None) -> GraderResult:
         if not self.allow_draft:
             rubric.require_locked()
-        prefix = GRADER_SYSTEM.format(exam=exam_text, question_id=question.id, rubric=render_question(rubric, question))
-        user = GRADER_USER.format(answer=answer_text)
+        prefix, user = self._prompts(rubric, question, exam_text, answer_text)
         hint = {"kind": "grade", "question": question.model_dump(), "answer": answer_text}
 
         async def once() -> GraderResult:
-            res = await self.llm.call(prefix=prefix, user=user, tool_name="submit_grades",
-                                      tool_description="Submit per-criterion suggested grades.",
-                                      schema=GradeOutput, max_tokens=4096, hint=hint)
+            # BudgetExceeded propagates to the caller (pipeline stops cleanly); it is not a grader error.
+            res = await self.llm.call(prefix=prefix, user=user, schema=GradeOutput, max_tokens=GRADE_MAX_TOKENS,
+                                      effort="high", purpose=self.purpose, budget=budget, hint=hint)
+            if not res.ok:  # e.g. refusal: structured error, never a made-up grade
+                return GraderResult(grader=self.name, model=self.model, served_model=res.served_model,
+                                    question_id=question.id, usage=res.usage.to_dict(), error=res.error)
             out: GradeOutput = res.parsed  # type: ignore[assignment]
             return GraderResult(grader=self.name, model=self.model, served_model=res.served_model,
                                 question_id=question.id, grades=self._convert(question, out, answer_text),

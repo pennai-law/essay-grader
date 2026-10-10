@@ -39,4 +39,5 @@ class Grader(Protocol):
     name: str
     model: str
 
-    async def grade(self, rubric: Rubric, question: Question, exam_text: str, answer_text: str) -> GraderResult: ...
+    async def grade(self, rubric: Rubric, question: Question, exam_text: str, answer_text: str, *,
+                    budget=None) -> GraderResult: ...

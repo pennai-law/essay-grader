@@ -11,7 +11,7 @@ import inspect
 import os
 from typing import Any, Awaitable, Callable
 
-from ..llm import Usage, with_retries
+from ..llm import Usage, estimate_cost, with_retries
 from ..rubric import Criterion, Question, Rubric
 from .base import CriterionGrade, GraderResult
 
@@ -164,18 +164,28 @@ class OpenAIDecisionsGrader:
     name = "openai"
 
     def __init__(self, transport: Transport | None = None, *, model: str = DEFAULT_DECISIONS_MODEL,
-                 threshold: float = 0.5, retry_delay: float = 1.0, attempts: int = 4):
+                 threshold: float = 0.5, retry_delay: float = 1.0, attempts: int = 4, allow_draft: bool = False):
         self.transport = transport or default_transport()
+        self.allow_draft = allow_draft  # hardening stress-grades a DRAFT rubric
         self.model, self.threshold = model, threshold
         self.retry_delay, self.attempts = retry_delay, attempts
 
-    async def grade(self, rubric: Rubric, question: Question, exam_text: str, answer_text: str) -> GraderResult:
-        rubric.require_locked()
+    def estimate_cost(self, rubric: Rubric, question: Question, exam_text: str, answer_text: str, *,
+                      worst_case: bool = False) -> float:
+        body = build_request(rubric, question, answer_text, self.model, exam_text)
+        return estimate_cost(self.model, len(str(body)), 0)
+
+    async def grade(self, rubric: Rubric, question: Question, exam_text: str, answer_text: str, *,
+                    budget=None) -> GraderResult:
+        if not self.allow_draft:
+            rubric.require_locked()
         body = build_request(rubric, question, answer_text, self.model, exam_text)  # ONE request per answer per question
 
         async def once() -> GraderResult:
             resp = await self.transport("/decisions", body)
             grades, usage = parse_response(resp, question, threshold=self.threshold)
+            if budget:  # Decisions bills input tokens only; it is nearly free, so it is recorded, not gated
+                budget.record("grade-decisions", self.model, Usage.from_dict(usage))
             return GraderResult(grader=self.name, model=self.model, served_model=resp.get("model"),
                                 question_id=question.id, grades=grades, usage=usage)
 

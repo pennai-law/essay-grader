@@ -118,6 +118,7 @@ class Policies(BaseModel):
     off_topic_policy: str = "Do not award points for material unrelated to the question; do not penalize it either unless a criterion says so."
     alternative_conclusions_policy: str = "Credit well-reasoned conclusions that differ from the model answer; grade the reasoning, not the conclusion."
     citation_policy: str = "Accurate citation of authority is credited only where a criterion asks for it; do not reward citation volume."
+    additional_rulings: list[str] = Field(default_factory=list, description="Rubric-wide rulings (from questionnaires).")
 
 
 class Calibration(BaseModel):
@@ -127,12 +128,28 @@ class Calibration(BaseModel):
     model: str | None = None
 
 
+class Provenance(BaseModel):
+    """Where an applied ruling/rewrite came from: which hardening (or calibration) run and which question."""
+    hardening_run_id: str
+    question_id: str
+    run_kind: Literal["hardening", "calibration"] = "hardening"
+    criterion_id: str | None = None
+    action: Literal["ruling", "rewrite_descriptor", "no_change"] = "ruling"
+    target: str | None = None  # rewrite target, e.g. "description", "level:adequate"
+    text: str
+    before: str | None = None  # previous text for rewrites
+    option_label: str | None = None
+    source: Literal["answer", "recommended_default", "custom"]
+    applied_at: str | None = None
+
+
 class Rubric(BaseModel):
     exam_id: str
     version: int = 1
     questions: list[Question]
     policies: Policies = Field(default_factory=Policies)
     calibration: Calibration | None = None
+    provenance: list[Provenance] = Field(default_factory=list)
     locked: bool = False
     content_hash: str | None = None
     locked_at: str | None = None
@@ -155,6 +172,11 @@ class Rubric(BaseModel):
     def compute_hash(self) -> str:
         """sha256 over canonical JSON of the rubric content (excludes lock bookkeeping fields)."""
         data = self.model_dump(mode="json", exclude={"locked", "content_hash", "locked_at"})
+        # Fields added later are omitted while empty so hashes of rubrics locked before they existed stay valid.
+        if not data.get("provenance"):
+            data.pop("provenance", None)
+        if not data["policies"].get("additional_rulings"):
+            data["policies"].pop("additional_rulings", None)
         blob = json.dumps(data, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
         return hashlib.sha256(blob.encode("utf-8")).hexdigest()
 

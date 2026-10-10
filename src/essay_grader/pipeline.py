@@ -11,9 +11,10 @@ from pathlib import Path
 
 from . import __version__
 from .agreement import AgreementConfig, evaluate, run_stats
+from .budget import Budget, BudgetExceeded
 from .graders.base import Grader, GraderResult
 from .ingest import Answer, apply_length_policy
-from .llm import Usage
+from .llm import DEFAULT_CLAUDE_MODEL, SONNET_MODEL, Usage
 from .prompts import prompt_hashes
 from .rubric import Rubric
 
@@ -53,9 +54,11 @@ def _complete(rec: dict, grader_names: list[str]) -> bool:
     return all(n in res and not res[n].get("error") for n in grader_names)
 
 
-async def _safe_grade(g: Grader, rubric: Rubric, qid: str, exam: str, text: str) -> GraderResult:
+async def _safe_grade(g: Grader, rubric: Rubric, qid: str, exam: str, text: str, budget: Budget) -> GraderResult:
     try:
-        return await g.grade(rubric, rubric.question(qid), exam, text)
+        return await g.grade(rubric, rubric.question(qid), exam, text, budget=budget)
+    except BudgetExceeded:
+        raise  # not a grader error: the pipeline stops cleanly and the answer stays pending
     except Exception as e:  # recorded, never raised: a failed grader sends the answer to human review
         return GraderResult(grader=g.name, model=g.model, question_id=qid, error=f"{type(e).__name__}: {e}"[:500])
 
@@ -64,22 +67,43 @@ def _check_metadata(path: Path, rubric: Rubric, graders: list[Grader], cfg: Grad
     if not path.exists():
         return None
     old = json.loads(path.read_text(encoding="utf-8"))
+    # `requested_model` is what the caller asked for; `model` is what was actually used (after any budget downgrade)
     same = (old["rubric"]["hash"] == rubric.content_hash and old["seed"] == cfg.seed
-            and [(g["name"], g["model"]) for g in old["graders"]] == [(g.name, g.model) for g in graders])
+            and [(g["name"], g.get("requested_model", g["model"])) for g in old["graders"]] == [(g.name, g.model) for g in graders])
     if not same:
         raise RuntimeError(f"run {cfg.run_id} exists with different rubric/seed/graders/models; use a new --run-id")
     return old
 
 
+def _estimate_pending(graders: list[Grader], rubric: Rubric, exam_text: str, pending: list[tuple[int, Answer]],
+                      worst_case: bool = False) -> float:
+    total = 0.0
+    for _, a in pending:
+        text, _info = apply_length_policy(a.text, rubric.policies.length_policy)
+        for g in graders:
+            est = getattr(g, "estimate_cost", None)
+            if est is not None:
+                total += est(rubric, rubric.question(a.question_id), exam_text, text, worst_case=worst_case)
+    return total
+
+
 async def run_pipeline(rubric: Rubric, exam_text: str, answers: list[Answer], graders: list[Grader],
-                       cfg: GradeConfig) -> Path:
+                       cfg: GradeConfig, *, budget: Budget | None = None) -> Path:
+    """Grade with a locked rubric. With a `budget`: estimate the whole run first (auto-downgrading Claude Opus -> Sonnet
+    if needed, else raising BudgetExceeded), and stop cleanly mid-run when the budget is exhausted; re-running with the
+    same run id resumes. Every degradation is recorded in run_metadata.json."""
     rubric.require_locked()
     if not graders:
         raise ValueError("at least one grader required")
+    budget = budget if budget is not None else Budget.unlimited()
     run_dir = cfg.run_dir
-    run_dir.mkdir(parents=True, exist_ok=True)
     results_path = run_dir / "results.jsonl"
     old_meta = _check_metadata(run_dir / "run_metadata.json", rubric, graders, cfg)
+    requested = {g.name: g.model for g in graders}
+    degradations: list[dict] = list(old_meta.get("degradations", [])) if old_meta else []
+    if old_meta:  # resume with the models actually used so far: one run, one model per grader
+        eff = {g["name"]: g["model"] for g in old_meta["graders"]}
+        graders = [g.with_model(eff[g.name]) if hasattr(g, "with_model") and eff[g.name] != g.model else g for g in graders]
     started = old_meta["started_at"] if old_meta else datetime.now(timezone.utc).isoformat(timespec="seconds")
     names = [g.name for g in graders]
     calib = set(rubric.calibration.sample_ids) if rubric.calibration else set()
@@ -93,13 +117,48 @@ async def run_pipeline(rubric: Rubric, exam_text: str, answers: list[Answer], gr
     pending = [(i, a) for i, a in enumerate(ordered)
                if (a.student_id, a.question_id) not in done or not _complete(done[(a.student_id, a.question_id)], names)]
 
+    # full pre-run estimate; auto-downgrade Claude Opus -> Sonnet, else refuse (no prompt)
+    estimate = _estimate_pending(graders, rubric, exam_text, pending)
+    if estimate > budget.remaining() + 1e-12:
+        swapped = [g.with_model(SONNET_MODEL) if g.name == "claude" and g.model == DEFAULT_CLAUDE_MODEL and hasattr(g, "with_model") else g
+                   for g in graders]
+        new_estimate = _estimate_pending(swapped, rubric, exam_text, pending)
+        downgraded = swapped != graders
+        if downgraded:
+            graders = swapped
+            degradations.append({"kind": "grader_model_downgrade", "grader": "claude", "from": DEFAULT_CLAUDE_MODEL,
+                                 "to": SONNET_MODEL, "estimate_before_usd": round(estimate, 4),
+                                 "estimate_after_usd": round(new_estimate, 4), "remaining_usd": round(budget.remaining(), 4),
+                                 "reason": "estimated run cost exceeded the remaining budget"})
+        estimate = new_estimate
+        if estimate > budget.remaining() + 1e-12:
+            raise BudgetExceeded(
+                f"estimated cost ${estimate:.2f} for {len(pending)} answer(s) exceeds the remaining budget "
+                f"${budget.remaining():.2f}" + (" even after downgrading Claude to " + SONNET_MODEL if downgraded else "")
+                + "; raise the budget or grade fewer answers", estimate_usd=estimate, remaining_usd=budget.remaining())
+    run_dir.mkdir(parents=True, exist_ok=True)
+
     sem, wlock = asyncio.Semaphore(cfg.concurrency), asyncio.Lock()
+
+    stopped = asyncio.Event()
 
     async def work(idx: int, a: Answer, fh) -> None:
         async with sem:
+            if stopped.is_set():
+                return
             # length policy is deterministic and applied BEFORE graders; graders never see the student id
             text, info = apply_length_policy(a.text, rubric.policies.length_policy)
-            rs = await asyncio.gather(*(_safe_grade(g, rubric, a.question_id, exam_text, text) for g in graders))
+            if not budget.can_afford(_estimate_pending(graders, rubric, exam_text, [(idx, a)], worst_case=True)):
+                stopped.set()
+                return
+            rs = await asyncio.gather(*(_safe_grade(g, rubric, a.question_id, exam_text, text, budget) for g in graders),
+                                      return_exceptions=True)
+            if any(isinstance(r, BudgetExceeded) for r in rs):
+                stopped.set()  # nothing is recorded for this answer; it stays pending for the resume
+                return
+            for r in rs:
+                if isinstance(r, BaseException):
+                    raise r
             results = {r.grader: r for r in rs}
             ev = evaluate(rubric.question(a.question_id), results, cfg.agreement)
             if ev["suggested_total"] is not None:
@@ -123,7 +182,10 @@ async def run_pipeline(rubric: Rubric, exam_text: str, answers: list[Answer], gr
     _write_queue(run_dir / "review_queue.csv", records)
     stats = run_stats(records, rubric)
     (run_dir / "agreement_report.md").write_text(_report_md(rubric, records, stats, cfg), encoding="utf-8")
-    _write_metadata(run_dir / "run_metadata.json", rubric, graders, cfg, records, started)
+    finished = {(r["student_id"], r["question_id"]) for r in records if _complete(r, names)}
+    remaining = sum(1 for a in answers if (a.student_id, a.question_id) not in finished)
+    _write_metadata(run_dir / "run_metadata.json", rubric, graders, cfg, records, started, requested=requested,
+                    degradations=degradations, budget=budget, stopped=stopped.is_set(), remaining=remaining)
     return run_dir
 
 
@@ -194,7 +256,8 @@ def _report_md(rubric: Rubric, records: list[dict], stats: list[dict], cfg: Grad
 
 
 def _write_metadata(path: Path, rubric: Rubric, graders: list[Grader], cfg: GradeConfig, records: list[dict],
-                    started: str) -> None:
+                    started: str, *, requested: dict[str, str], degradations: list[dict], budget: Budget, stopped: bool,
+                    remaining: int) -> None:
     usage: dict[tuple[str, str], Usage] = {}
     served: dict[str, set[str]] = {g.name: set() for g in graders}
     for r in records:
@@ -207,13 +270,20 @@ def _write_metadata(path: Path, rubric: Rubric, graders: list[Grader], cfg: Grad
         "started_at": started, "finished_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "rubric": {"exam_id": rubric.exam_id, "version": rubric.version, "hash": rubric.content_hash,
                    "calibration_sample_ids": rubric.calibration.sample_ids if rubric.calibration else []},
-        "graders": [{"name": g.name, "model": g.model, "served_models": sorted(served[g.name])} for g in graders],
+        "status": "stopped_budget_exhausted" if stopped else "complete",
+        "answers_remaining": remaining,
+        "resume": ("Budget exhausted; finished answers are saved. Re-run with the same --run-id and more budget to resume."
+                   if stopped else None),
+        "degradations": degradations,
+        "budget": budget.summary(),
+        "graders": [{"name": g.name, "model": g.model, "requested_model": requested[g.name],
+                     "served_models": sorted(served[g.name])} for g in graders],
         "prompt_hashes": prompt_hashes(),
         "config": {"concurrency": cfg.concurrency, "exclude_calibration": cfg.exclude_calibration,
                    "agreement": cfg.agreement.__dict__},
         "counts": {"answers": len(records)},
         "usage": [{"grader": n, "model": m, **u.to_dict(), "estimated_cost_usd": u.estimated_cost(m)}
                   for (n, m), u in sorted(usage.items())],
-        "cost_note": "Estimated from a static, possibly stale price table (llm.PRICE_PER_MTOK); verify against billing.",
+        "cost_note": "Estimated from llm.PRICE_PER_MTOK (Anthropic pricing as of Oct 2026); verify against billing. `budget` covers this invocation only.",
     }
     path.write_text(json.dumps(meta, indent=2), encoding="utf-8")
