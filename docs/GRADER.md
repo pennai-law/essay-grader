@@ -32,7 +32,11 @@ Hardening never asks the professor anything while it runs. Output is `questionna
 - Each question: `id` (H1.., C1.. for calibration), `criterion_id` (null = rubric-level policy), a concrete `scenario` and a verbatim `excerpt`
   from the triggering synthetic answer (replaced by a real slice of the answer if the model's excerpt is not verbatim), `why_it_matters`, 2-4
   `options` (`label` plus exactly one of `ruling` text or a descriptor `rewrite {target, text}`; neither = "keep as written"), `recommended`,
-  `allow_custom: true`.
+  `allow_custom: true`. Each option may also carry `projected` (optional; absent on older questionnaires and on calibration questionnaires):
+  the model's ESTIMATE, produced in the same questionnaire call, of the effect of adopting that option on the triggering synthetic answer,
+  as `[{criterion_id, before_points, after_points}]`. Code validates the structure, drops unknown criteria and non-finite numbers, clamps
+  both numbers to the criterion's range (0..max_points) and replaces `before_points` with the stress-test mean when it was measured, so
+  only `after_points` is the model's guess. They are projections, not grading results.
 - `apply_answers(rubric, questionnaire, answers)` writes each choice into a new draft: rulings go to the criterion's `edge_case_rulings` (or
   `policies.additional_rulings`), rewrites replace the description / level or anchor descriptor / a policy. Each application is recorded in
   `rubric.provenance` (`hardening_run_id`, `question_id`, option, previous text, `source` = `answer` | `custom` | `recommended_default`) and the

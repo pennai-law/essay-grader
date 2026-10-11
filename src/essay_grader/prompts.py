@@ -86,6 +86,11 @@ For each question:
   rulings, or rubric-wide when criterion_id is null) or `rewrite` {{target, text}} (target is "description", "level:<label>" or "anchor:<value>" on
   that criterion, or "policy:off_topic_policy|alternative_conclusions_policy|citation_policy" when criterion_id is null; text is the replacement).
   Leave both unset only for an explicit \"keep the rubric as written\" option. Rulings must be general rules a grader can apply, never about one student. Options should be genuinely different pedagogical choices.
+  Each option also carries `projected`: your ESTIMATE of how adopting that option changes the score of the synthetic answer in `answer_id`,
+  as a list of {{criterion_id, before_points, after_points}} (usually one entry, for the question's criterion; add an entry for any other
+  criterion materially affected). `before_points` is that answer's mean points on the criterion in the stress results (use `mean_points`);
+  `after_points` is your estimate under the option, between 0 and the criterion's max points. For a "keep as written" option the two are equal.
+  Leave `projected` empty when you cannot estimate (for example a rubric-level policy question with no clear criterion). These are projections.
 - recommended: the label of the option you recommend.
 
 <exam>

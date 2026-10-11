@@ -97,6 +97,17 @@ def test_harden_offline_one_questionnaire(draft, exam_text, tmp_path):
     for q in qn.questions:  # each carries a verbatim-from-synthetic excerpt
         assert q.excerpt and q.answer_id
     assert all("claude_evidence" in c for r in rep["stress"] for c in r["criteria"])
+    # one call produced the projections: they are clamped to each criterion's range and anchored to the measured points
+    maxes = {c.id: c.max_points for q in draft.questions for c in q.criteria}
+    measured = {r["answer_id"]: {c["criterion_id"]: sum(c["points"]) / len(c["points"]) for c in r["criteria"]} for r in rep["stress"]}
+    projected = [(q, o, p) for q in qn.questions for o in q.options for p in (o.projected or [])]
+    assert projected, "the fake questionnaire carries projections"
+    for q, o, p in projected:
+        assert 0 <= p.after_points <= maxes[p.criterion_id] and 0 <= p.before_points <= maxes[p.criterion_id]
+        assert p.before_points == pytest.approx(round(measured[q.answer_id][p.criterion_id], 2))
+    assert any(p.after_points == 0 for _, _, p in projected) and any(p.after_points == maxes[p.criterion_id] for _, _, p in projected)
+    from essay_grader.prompts import QUESTIONNAIRE_SYSTEM
+    assert "before_points" in QUESTIONNAIRE_SYSTEM and "after_points" in QUESTIONNAIRE_SYSTEM  # asked for in the same call
     d = write_report(rep, tmp_path)
     for f in ("questionnaire.json", "questionnaire.md", "harden_report.md", "harden_report.json"):
         assert (d / f).exists()

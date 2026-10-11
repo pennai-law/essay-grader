@@ -189,3 +189,56 @@ def test_cli_harden_apply_answers_lock_grade_flow(fix, tmp_path):
     # budget too small for even the minimal plan -> exit 4
     assert main(["harden", "--exam", str(fix / "exam.txt"), "--syllabus", str(fix / "exam.txt"), "--rubric", str(tmp_path / "draft.yaml"),
                  "--dry-run", "--budget-usd", "0.001", "--out", str(out)]) == 4
+
+
+# ---- per-option projected effects (consequences shown to the professor) ---------------------------------------------
+
+def _pe(cid, before, after):
+    return qm.ProjectedEffect(criterion_id=cid, before_points=before, after_points=after)
+
+
+def test_old_questionnaire_without_projected_still_loads():
+    old = {"schema_version": 1, "run_id": "r", "run_kind": "hardening", "exam_id": "e", "rubric_version": 1,
+           "draft_rubric_hash": "x", "questions": [{"id": "H1", "scenario": "s", "why_it_matters": "w", "recommended": "A",
+                                                    "options": [{"label": "A", "ruling": "x"}, {"label": "B", "ruling": "y"}]}]}
+    qn = qm.Questionnaire.model_validate(old)
+    assert all(o.projected is None for o in qn.questions[0].options)
+    assert "Projected by AI" not in qm.render_markdown(qn)
+
+
+def test_projected_is_clamped_to_criterion_range_and_before_anchored(draft):
+    # ucc_applies has max 1 point, acceptance_variance max 3
+    opts = [Option(label="A", ruling="Rule A applies.", projected=[_pe("acceptance_variance", 9.0, -2.0)]),
+            Option(label="B", ruling="Rule B applies.", projected=[_pe("acceptance_variance", 9.0, 7.5)])]
+    qn = build_questionnaire(draft, [rq("acceptance_variance", opts=opts)], run_id="r",
+                             observed_points={"SYN001": {"acceptance_variance": 2.0}})
+    a, b = qn.questions[0].options
+    assert (a.projected[0].before_points, a.projected[0].after_points) == (2.0, 0.0)   # before = measured, after clamped up
+    assert (b.projected[0].before_points, b.projected[0].after_points) == (2.0, 3.0)   # clamped down to max_points
+    # and without observed data the model's before is only clamped
+    qn2 = build_questionnaire(draft, [rq("acceptance_variance", opts=opts)], run_id="r")
+    assert qn2.questions[0].options[0].projected[0].before_points == 3.0
+
+
+def test_projected_drops_unknown_criteria_duplicates_and_nan(draft):
+    nan = float("nan")
+    opts = [Option(label="A", ruling="Rule A applies.", projected=[_pe("nope", 1, 0), _pe("ucc_applies", nan, 0), _pe("ucc_applies", 1, 0),
+                                                                   _pe("ucc_applies", 1, 1)]),
+            Option(label="B", ruling="Rule B applies.", projected=[_pe("nope", 1, 0)])]
+    qn = build_questionnaire(draft, [rq("ucc_applies", opts=opts)], run_id="r")
+    a, b = qn.questions[0].options
+    assert [(p.criterion_id, p.before_points, p.after_points) for p in a.projected] == [("ucc_applies", 1.0, 0.0)]
+    assert b.projected is None
+    assert any("unknown criterion 'nope'" in w for w in qn.warnings) and any("non-numeric" in w for w in qn.warnings)
+
+
+def test_calibration_questionnaires_carry_no_projections(draft):
+    opts = [Option(label="A", ruling="Rule A applies.", projected=[_pe("ucc_applies", 1, 0)]), Option(label="B", ruling="Rule B applies.")]
+    qn = build_questionnaire(draft, [rq("ucc_applies", opts=opts)], run_id="c", run_kind="calibration", id_prefix="C")
+    assert all(o.projected is None for o in qn.questions[0].options)
+
+
+def test_render_markdown_shows_projection(draft):
+    opts = [Option(label="A", ruling="Rule A applies.", projected=[_pe("acceptance_variance", 2, 1)]), Option(label="B", ruling="Rule B applies.")]
+    md = qm.render_markdown(build_questionnaire(draft, [rq("acceptance_variance", opts=opts)], run_id="r"))
+    assert "Projected by AI on the sample answer: acceptance_variance 2 -> 1." in md

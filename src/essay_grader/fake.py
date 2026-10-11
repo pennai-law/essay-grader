@@ -123,9 +123,15 @@ class FakeLLM(AnthropicLLM):
                 cid = cids[i % len(cids)] if i % 4 != 3 else None
                 a = answers[i % len(answers)]["id"] if answers else None
                 words = " ".join(f"fakeword{i}{x}" for x in "abcdefgh")
-                opts = ([{"label": "adopt", "ruling": f"[fake ruling {i}] Apply the stated rule consistently."},
-                         {"label": "rewrite", "rewrite": {"target": "description", "text": f"[fake rewrite {i}]"}},
-                         {"label": "leave", "ruling": f"[fake ruling {i}b] Grade as written."}] if cid else
+                cmax = h.get("criteria_max", {}).get(cid, 1.0) if cid else 1.0
+                obs = (h.get("observed_points", {}).get(a, {}) or {}).get(cid, cmax / 2) if cid else 0.0
+
+                def proj(after: float, cid=cid, obs=obs) -> list[dict]:  # deliberately sloppy numbers: the engine must clamp them
+                    return [{"criterion_id": cid, "before_points": obs + 99, "after_points": after}] if cid else []
+
+                opts = ([{"label": "adopt", "ruling": f"[fake ruling {i}] Apply the stated rule consistently.", "projected": proj(-3.0)},
+                         {"label": "rewrite", "rewrite": {"target": "description", "text": f"[fake rewrite {i}]"}, "projected": proj(cmax * 5)},
+                         {"label": "leave", "ruling": f"[fake ruling {i}b] Grade as written.", "projected": proj(obs)}] if cid else
                         [{"label": "strict", "ruling": f"[fake policy {i}] Rabbit-hole material earns no credit."},
                          {"label": "lenient", "rewrite": {"target": "policy:off_topic_policy", "text": f"[fake policy rewrite {i}]"}}])
                 qs.append({"criterion_id": cid, "scenario": f"[fake] scenario {words}", "excerpt": "", "answer_id": a,

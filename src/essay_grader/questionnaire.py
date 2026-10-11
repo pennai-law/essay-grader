@@ -6,6 +6,7 @@ with provenance. The result is ready to `lock()`.
 """
 from __future__ import annotations
 
+import math
 import re
 from datetime import datetime, timezone
 from typing import Any, Literal
@@ -24,11 +25,21 @@ class Rewrite(BaseModel):
     text: str = Field(description="The exact replacement text.")
 
 
+class ProjectedEffect(BaseModel):
+    """The model's ESTIMATE of what adopting an option does to the sample answer that triggered the question."""
+    criterion_id: str
+    before_points: float = Field(description="That sample answer's points on the criterion today (the stress-test mean).")
+    after_points: float = Field(description="Estimated points on the same criterion if this option is adopted.")
+
+
 class Option(BaseModel):
     label: str
     ruling: str | None = Field(default=None, description="Exact ruling text appended to the criterion (or rubric-wide).")
     rewrite: Rewrite | None = Field(default=None, description="Descriptor rewrite; set this OR ruling, not both. "
                                     "Neither set means 'keep the rubric as written'.")
+    projected: list[ProjectedEffect] | None = Field(
+        default=None, description="Optional AI projection of this option's effect on the triggering synthetic answer's criterion scores. "
+        "Absent on questionnaires written before this field existed, and on calibration questionnaires.")
 
     @property
     def applied_text(self) -> str:
@@ -152,6 +163,39 @@ def check_option(rubric: Rubric, criterion_id: str | None, o: Option) -> str | N
     return f"rewrite target {rw.target!r} does not exist on criterion {criterion_id}"
 
 
+def clean_projected(rubric: Rubric, o: Option, observed: dict[str, float] | None = None,
+                    warns: list[str] | None = None) -> Option:
+    """Validate an option's projections against the rubric and clamp them to each criterion's range (0..max_points).
+
+    Unknown criteria and non-finite numbers are dropped (with a warning); one entry per criterion (the first wins). When the
+    stress test observed the triggering answer's points on a criterion (`observed`: criterion id -> mean points),
+    `before_points` is replaced by that measured value, so only `after_points` is the model's estimate.
+    """
+    if not o.projected:
+        return o.model_copy(update={"projected": None})
+    out: list[ProjectedEffect] = []
+    seen: set[str] = set()
+    for e in o.projected:
+        c = _find_criterion(rubric, e.criterion_id)
+        if c is None:
+            if warns is not None:
+                warns.append(f"dropped projection for unknown criterion {e.criterion_id!r} (option {o.label!r})")
+            continue
+        if e.criterion_id in seen:
+            continue
+        before, after = e.before_points, e.after_points
+        if observed and e.criterion_id in observed:
+            before = observed[e.criterion_id]
+        if not (math.isfinite(before) and math.isfinite(after)):
+            if warns is not None:
+                warns.append(f"dropped non-numeric projection for {e.criterion_id!r} (option {o.label!r})")
+            continue
+        seen.add(e.criterion_id)
+        out.append(ProjectedEffect(criterion_id=e.criterion_id, before_points=round(min(c.max_points, max(0.0, before)), 2),
+                                   after_points=round(min(c.max_points, max(0.0, after)), 2)))
+    return o.model_copy(update={"projected": out or None})
+
+
 # ---------------------------------------------------------------------------------------------------------------------
 # ranking / dedupe / cap
 
@@ -174,9 +218,15 @@ def build_questionnaire(rubric: Rubric, raw: list[RawQuestion], *, run_id: str, 
                         max_questions: int = 12, crit_spread: dict[str, float] | None = None,
                         answer_gap: dict[str, float] | None = None, answer_texts: dict[str, str] | None = None,
                         model: str | None = None, id_prefix: str = "H", warnings: list[str] | None = None,
-                        draft_hash: str | None = None) -> Questionnaire:
-    """Validate, score, dedupe, rank and cap raw questions into a Questionnaire."""
+                        draft_hash: str | None = None,
+                        observed_points: dict[str, dict[str, float]] | None = None) -> Questionnaire:
+    """Validate, score, dedupe, rank and cap raw questions into a Questionnaire.
+
+    `observed_points` (answer id -> criterion id -> mean stress-test points) anchors each projection's `before_points` to what
+    was measured. Calibration questionnaires carry no projections (their questions are about general approaches, not one answer).
+    """
     crit_spread, answer_gap, answer_texts = crit_spread or {}, answer_gap or {}, answer_texts or {}
+    observed_points = observed_points or {}
     warns = list(warnings or [])
     scored: list[tuple[float, RawQuestion]] = []
     for rq in raw:
@@ -190,7 +240,8 @@ def build_questionnaire(rubric: Rubric, raw: list[RawQuestion], *, run_id: str, 
                 warns.append(f"dropped option {o.label!r} ({prob})")
             elif _norm(o.label) not in seen:
                 seen.add(_norm(o.label))
-                opts.append(o)
+                opts.append(o.model_copy(update={"projected": None}) if run_kind == "calibration"
+                            else clean_projected(rubric, o, observed_points.get(rq.answer_id or ""), warns))
         opts = opts[:4]
         if len(opts) < 2:
             warns.append(f"dropped question {rq.scenario[:60]!r}: fewer than 2 valid options")
@@ -250,7 +301,11 @@ def render_markdown(qn: Questionnaire) -> str:
             star = " (recommended)" if o.label == q.recommended else ""
             what = (f"rewrite `{o.rewrite.target}` to: {o.rewrite.text}" if o.rewrite
                     else f"ruling: {o.ruling}" if o.ruling else "keep the rubric as written (no change)")
-            L.append(f"- **{o.label}**{star}: {what}")
+            proj = ""
+            if o.projected:
+                proj = " Projected by AI on the sample answer: " + "; ".join(
+                    f"{p.criterion_id} {p.before_points:g} -> {p.after_points:g}" for p in o.projected) + "."
+            L.append(f"- **{o.label}**{star}: {what}{proj}")
         L += ["- *Or write your own ruling text.*", ""]
     if qn.warnings:
         L += ["## Notes", ""] + [f"- {w}" for w in qn.warnings] + [""]

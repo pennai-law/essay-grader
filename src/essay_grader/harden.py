@@ -387,13 +387,16 @@ async def _questionnaire(rubric, exam_text, llm, pl: Plan, budget: Budget, cfg: 
                 [{"answer_id": r["answer_id"], "question_id": r["question_id"], "archetype": r["archetype"],
                   "mean_pct_of_max": round(r["mean_fraction"] * 100), "expected_band": r["expected_band"],
                   "total_spread_pts": r["total_spread"],
-                  "criteria": [{"criterion_id": c["criterion_id"], "points": c["points"], "spread_pts": c["spread"]} for c in r["criteria"]]}
+                  "criteria": [{"criterion_id": c["criterion_id"], "points": c["points"],
+                               "mean_points": _mean_points(c["points"]), "spread_pts": c["spread"]} for c in r["criteria"]]}
                  for r in stress_rows], indent=0) + "\n</stress_results>\n\n"
             "<synthetic_answers>\n" + "\n".join(
                 f'<answer id="{a["id"]}" question_id="{a["question_id"]}" archetype="{a["archetype"]}">\n{a["text"][:2500]}\n</answer>'
                 for a in answers) + "\n</synthetic_answers>\n\nWrite the questionnaire.")
     prefix = QUESTIONNAIRE_SYSTEM.format(max_questions=cfg.max_questions, exam=exam_text, rubric_all=render_rubric_all(rubric))
+    observed = {r["answer_id"]: {c["criterion_id"]: _mean_points(c["points"]) for c in r["criteria"]} for r in stress_rows}
     hint = {"kind": "questionnaire", "criterion_ids": [c.id for q in rubric.questions for c in q.criteria],
+            "criteria_max": {c.id: c.max_points for q in rubric.questions for c in q.criteria}, "observed_points": observed,
             "answers": [{"id": a["id"], "archetype": a["archetype"]} for a in answers], "max_questions": cfg.max_questions}
     raw: list[qmod.RawQuestion] | None = None
     used_model = None
@@ -421,7 +424,11 @@ async def _questionnaire(rubric, exam_text, llm, pl: Plan, budget: Budget, cfg: 
         degradations.append("questionnaire built without an LLM call (fallback from critique findings)")
     return qmod.build_questionnaire(rubric, raw, run_id=run_id, max_questions=cfg.max_questions, crit_spread=crit_spread,
                                     answer_gap=answer_gap, answer_texts=texts, model=used_model, id_prefix="H",
-                                    warnings=warnings)
+                                    warnings=warnings, observed_points=observed)
+
+
+def _mean_points(pts: list[float]) -> float:
+    return round(sum(pts) / len(pts), 2) if pts else 0.0
 
 
 def fallback_questions(rubric: Rubric, findings: list[dict]) -> list[qmod.RawQuestion]:
