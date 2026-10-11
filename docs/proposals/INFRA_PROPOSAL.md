@@ -1,3 +1,5 @@
+> **Superseded** by `pennai-law/practice-sim` `docs/proposals/PROPOSAL_WAGNER.md` (October 2026). Kept for history; do not use for decisions.
+
 ---
 title: "Database and Email Infrastructure Proposal"
 subtitle: "Penn Carey Law AI Lab: Essay Grader and Practice Simulation"
