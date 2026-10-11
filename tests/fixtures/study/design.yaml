@@ -1,0 +1,25 @@
+# FICTIONAL study design used by the offline tests. No Penn exam content.
+study_id: fictional-fall-2026-widgets
+protocol: protocol
+exam:
+  course: Introductory Widget Law
+  professor: Quill
+  term: Fall 2026
+  date: 2026-12-10
+  delivery: in-class
+section: A
+components:
+  - {id: q1, kind: essay, title: "Question 1: The Gadget Maker", question_file: exam/q1.txt, word_ceiling: 600, points: 60}
+  - {id: mcq, kind: mcq, question_file: exam/mcq.txt, n_questions: 5, answer_key_file: exam/answer_key.txt, points: 5}
+arms:
+  - {id: A, label: no materials, materials: null}
+  - {id: S, label: syllabus only, materials: materials/syllabus}
+  - {id: B, label: with materials, materials: materials/full}
+models:
+  - {key: sonnet, provider: anthropic, model: claude-sonnet-5-5, effort: medium}
+examids: {A: "0137", S: "0460", B: "0891"}
+examid_policy: {source: fictional registrar reservation, confirmed: true, note: fixture only}
+real_id_range: [1, 1203]
+seed: 7
+package:
+  timestamp_base: "202612101400"

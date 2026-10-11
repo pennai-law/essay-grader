@@ -1,0 +1,29 @@
+exam_id: CONTRACTS-FICTIONAL-1
+version: 1
+policies:
+  length_policy: {mode: grade_first_n_words, word_cap: 120}
+questions:
+  - id: Q1
+    criteria:
+      - id: ucc_applies
+        description: States that the UCC governs because the contract is for the sale of goods.
+        max_points: 1
+        kind: binary
+      - id: acceptance_variance
+        description: Analyzes whether the reply with a different delivery date operates as an acceptance under UCC 2-207.
+        max_points: 3
+        kind: choice
+        levels:
+          - {label: none, points: 0, descriptor: Does not address the differing delivery term.}
+          - {label: partial, points: 1.5, descriptor: Notes the variance but analysis is conclusory.}
+          - {label: full, points: 3, descriptor: Applies 2-207 and explains why the term is a proposal or material alteration.}
+      - id: quality_of_reasoning
+        description: Overall quality of the legal reasoning tying facts to rules.
+        max_points: 4
+        kind: score
+        scale:
+          min: 0
+          max: 4
+          anchors:
+            - {value: 0, descriptor: No reasoning.}
+            - {value: 4, descriptor: Precise, complete, fact-driven reasoning.}
