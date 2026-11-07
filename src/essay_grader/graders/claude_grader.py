@@ -6,7 +6,7 @@ import re
 from pydantic import BaseModel, Field
 
 from ..llm import StructuredLLM, estimate_cost, with_retries
-from ..prompts import GRADER_SYSTEM, GRADER_USER, render_question
+from ..prompts import GRADER_SYSTEM, GRADER_USER, neutralize, render_question
 from ..rubric import Question, Rubric
 from .base import CriterionGrade, GraderResult
 
@@ -25,7 +25,7 @@ class GradeOutput(BaseModel):
     judgments: list[CriterionJudgment]
 
 
-_SUBS = {"‘": "'", "’": "'", "“": '"', "”": '"', "–": "-", "—": "-", " ": " "}
+_SUBS = {"\u200b": "", "‘": "'", "’": "'", "“": '"', "”": '"', "–": "-", "—": "-", " ": " "}
 
 
 def _norm(s: str) -> str:
@@ -68,8 +68,8 @@ class ClaudeGrader:
                             purpose=self.purpose)
 
     def _prompts(self, rubric: Rubric, question: Question, exam_text: str, answer_text: str) -> tuple[str, str]:
-        prefix = GRADER_SYSTEM.format(exam=exam_text, question_id=question.id, rubric=render_question(rubric, question))
-        return prefix, GRADER_USER.format(answer=answer_text)
+        prefix = GRADER_SYSTEM.format(exam=neutralize(exam_text), question_id=question.id, rubric=render_question(rubric, question))
+        return prefix, GRADER_USER.format(answer=neutralize(answer_text))
 
     def estimate_cost(self, rubric: Rubric, question: Question, exam_text: str, answer_text: str, *,
                       worst_case: bool = False) -> float:

@@ -17,6 +17,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from ..ingest import SUPPORTED, extract_text
+from ..prompts import _attr, neutralize
 from .design import Design
 
 
@@ -65,7 +66,7 @@ class MaterialsBundle:
             return ""
         parts = ["<attached_materials>"]
         for f in self.files:
-            parts.append(f'<file name="{f.rel}">\n{f.text.strip()}\n</file>')
+            parts.append(f'<file name="{_attr(f.rel)}">\n{neutralize(f.text.strip())}\n</file>')
         parts.append("</attached_materials>")
         return "\n".join(parts)
 

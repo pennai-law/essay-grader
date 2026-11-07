@@ -20,7 +20,7 @@ from .budget import Budget, BudgetExceeded
 from .graders.claude_grader import GRADE_MAX_TOKENS, ClaudeGrader
 from .ingest import apply_length_policy
 from .llm import DEFAULT_CLAUDE_MODEL, SONNET_MODEL, StructuredLLM, estimate_cost
-from .prompts import (ARCHETYPES, CRITIQUE_SYSTEM, GRADER_SYSTEM, QUESTIONNAIRE_SYSTEM, SYNTH_SYSTEM, SYNTH_USER,
+from .prompts import (_attr, neutralize, ARCHETYPES, CRITIQUE_SYSTEM, GRADER_SYSTEM, QUESTIONNAIRE_SYSTEM, SYNTH_SYSTEM, SYNTH_USER,
                       prompt_hashes, render_question, render_rubric_all)
 from .rubric import Rubric
 
@@ -248,7 +248,7 @@ async def harden(rubric: Rubric, exam_text: str, syllabus_text: str, llm: Struct
     async def critique_call() -> CritiqueOutput | None:
         try:
             r = await llm.with_model(pl.critique_model).call(
-                prefix=CRITIQUE_SYSTEM.format(exam=exam_text, syllabus=syllabus_text, rubric_all=render_rubric_all(rubric)),
+                prefix=CRITIQUE_SYSTEM.format(exam=neutralize(exam_text), syllabus=neutralize(syllabus_text), rubric_all=render_rubric_all(rubric)),
                 user="Review the draft rubric and report all findings.", schema=CritiqueOutput,
                 max_tokens=CRITIQUE_MAX_TOKENS, effort="high", purpose="harden-critique", budget=budget,
                 hint={"kind": "critique", "criterion_ids": crit_ids})
@@ -266,7 +266,7 @@ async def harden(rubric: Rubric, exam_text: str, syllabus_text: str, llm: Struct
         listing = "\n".join(f"{s['question_id']} | {s['archetype']} | ~{s['words']} words" for s in specs)
         try:
             r = await llm.with_model(pl.synth_model).call(
-                prefix=SYNTH_SYSTEM.format(exam=exam_text, syllabus=syllabus_text),
+                prefix=SYNTH_SYSTEM.format(exam=neutralize(exam_text), syllabus=neutralize(syllabus_text)),
                 user=SYNTH_USER.format(archetype_defs="\n".join(f"- {a}: {ARCHETYPES[a]}" for a in pl.archetypes), specs=listing),
                 schema=SynthAllOutput, max_tokens=pl.synth_max_tokens, effort="medium", purpose="harden-synthetic",
                 budget=budget, hint={"kind": "synth_all", "specs": specs})
@@ -382,7 +382,7 @@ async def harden(rubric: Rubric, exam_text: str, syllabus_text: str, llm: Struct
 async def _questionnaire(rubric, exam_text, llm, pl: Plan, budget: Budget, cfg: HardenConfig, run_id, findings, flags,
                          stress_rows, answers, crit_spread, answer_gap, degradations, errors) -> qmod.Questionnaire:
     texts = {a["id"]: a["text"] for a in answers}
-    user = ("<critique_findings>\n" + json.dumps(findings, indent=1) + "\n</critique_findings>\n\n"
+    user = ("<critique_findings>\n" + neutralize(json.dumps(findings, indent=1)) + "\n</critique_findings>\n\n"
             "<stress_results>\n" + json.dumps(
                 [{"answer_id": r["answer_id"], "question_id": r["question_id"], "archetype": r["archetype"],
                   "mean_pct_of_max": round(r["mean_fraction"] * 100), "expected_band": r["expected_band"],
@@ -391,9 +391,9 @@ async def _questionnaire(rubric, exam_text, llm, pl: Plan, budget: Budget, cfg: 
                                "mean_points": _mean_points(c["points"]), "spread_pts": c["spread"]} for c in r["criteria"]]}
                  for r in stress_rows], indent=0) + "\n</stress_results>\n\n"
             "<synthetic_answers>\n" + "\n".join(
-                f'<answer id="{a["id"]}" question_id="{a["question_id"]}" archetype="{a["archetype"]}">\n{a["text"][:2500]}\n</answer>'
+                f'<answer id="{_attr(a["id"])}" question_id="{_attr(a["question_id"])}" archetype="{_attr(a["archetype"])}">\n{neutralize(a["text"][:2500])}\n</answer>'
                 for a in answers) + "\n</synthetic_answers>\n\nWrite the questionnaire.")
-    prefix = QUESTIONNAIRE_SYSTEM.format(max_questions=cfg.max_questions, exam=exam_text, rubric_all=render_rubric_all(rubric))
+    prefix = QUESTIONNAIRE_SYSTEM.format(max_questions=cfg.max_questions, exam=neutralize(exam_text), rubric_all=render_rubric_all(rubric))
     observed = {r["answer_id"]: {c["criterion_id"]: _mean_points(c["points"]) for c in r["criteria"]} for r in stress_rows}
     hint = {"kind": "questionnaire", "criterion_ids": [c.id for q in rubric.questions for c in q.criteria],
             "criteria_max": {c.id: c.max_points for q in rubric.questions for c in q.criteria}, "observed_points": observed,

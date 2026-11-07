@@ -14,7 +14,7 @@ from . import questionnaire as qmod
 from .budget import Budget, BudgetExceeded
 from .ingest import Answer
 from .llm import StructuredLLM
-from .prompts import CALIBRATE_SYSTEM, prompt_hashes, render_question
+from .prompts import CALIBRATE_SYSTEM, _attr, neutralize, prompt_hashes, render_question
 from .rubric import Calibration, Rubric, save_rubric
 
 CALIBRATE_MAX_TOKENS = 6000
@@ -43,10 +43,10 @@ async def calibrate(rubric: Rubric, exam_text: str, samples: list[Answer], llm: 
         if not qs:
             continue
         used |= {a.student_id for a in qs}
-        body = "\n\n".join(f'<sample_answer id="{a.student_id}">\n{a.text}\n</sample_answer>' for a in qs)
+        body = "\n\n".join(f'<sample_answer id="{_attr(a.student_id)}">\n{neutralize(a.text)}\n</sample_answer>' for a in qs)
         try:
             res = await llm.call(
-                prefix=CALIBRATE_SYSTEM.format(exam=exam_text, question_id=q.id, rubric=render_question(rubric, q),
+                prefix=CALIBRATE_SYSTEM.format(exam=neutralize(exam_text), question_id=q.id, rubric=render_question(rubric, q),
                                                max_questions=max_questions),
                 user=body + "\n\nList the open questions for the professor.", schema=CalibrateOutput,
                 max_tokens=CALIBRATE_MAX_TOKENS, effort="high", purpose="calibrate", budget=budget,

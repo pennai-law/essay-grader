@@ -2,8 +2,28 @@
 from __future__ import annotations
 
 import hashlib
+import re
 
 from .rubric import Criterion, Question, Rubric
+
+# Every tag the prompts use as a delimiter around UNTRUSTED text (student answers, exam/syllabus/rubric text uploaded by users,
+# synthetic answers, study materials). Text inserted between delimiters must not be able to close them early or open new ones.
+DELIMITER_TAGS = ("student_answer", "exam", "rubric", "syllabus", "draft_rubric", "critique_findings", "stress_results",
+                  "synthetic_answers", "answer", "sample_answer", "attached_materials", "file")
+_DELIM_RE = re.compile(r"<(\s*/?\s*)(" + "|".join(DELIMITER_TAGS) + r")(?![A-Za-z0-9_])", re.IGNORECASE)
+ZWSP = "\u200b"
+
+
+def neutralize(text: str) -> str:
+    """Defuse delimiter tags inside untrusted text: `</student_answer>` becomes `<ZWSP/student_answer>` (reads the same to a
+    person, no longer closes the tag for the model). Idempotent. Evidence quoting still works: quote validation ignores ZWSP."""
+    return _DELIM_RE.sub(lambda m: "<" + ZWSP + m.group(1) + m.group(2), text or "")
+
+
+def _attr(value: object) -> str:
+    """A value placed inside a tag attribute (ids): no quotes, angle brackets or line breaks can escape it."""
+    return re.sub(r"[\"'<>\r\n]", "_", str(value))
+
 
 GRADER_SYSTEM = """You are assisting a law professor by producing SUGGESTED scores for one student's essay answer.
 A human will review your suggestions; you never finalize a grade.
@@ -151,11 +171,11 @@ def render_policies(r: Rubric) -> str:
 
 
 def render_question(r: Rubric, q: Question) -> str:
-    return render_policies(r) + "\n\nCriteria:\n" + "\n".join(render_criterion(c) for c in q.criteria)
+    return neutralize(render_policies(r) + "\n\nCriteria:\n" + "\n".join(render_criterion(c) for c in q.criteria))
 
 
 def render_rubric_all(r: Rubric) -> str:
-    return "\n\n".join(f"Question {q.id}:\n" + render_question(r, q) for q in r.questions)
+    return "\n\n".join(f"Question {q.id}:\n" + render_question(r, q) for q in r.questions)  # already neutralized per question
 
 
 ARCHETYPES: dict[str, str] = {
