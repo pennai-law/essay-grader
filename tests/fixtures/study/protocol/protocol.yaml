@@ -1,0 +1,23 @@
+protocol_id: fictional-widget-protocol
+prompt_version: 2
+templates:
+  essay: prompt_template_essay.txt
+  mcq: prompt_template_mcq.txt
+evolution:
+- version: 1
+  date: '2026-09-01'
+  summary: Initial fictional templates.
+  rationale: Baseline.
+  template_sha256:
+    essay: 29bcac50ce1ecceccb82f7e80444379bed41fd7d8247382982886d898afae210
+    mcq: 7c8b851fdc41aa6375ecd62097aa2c34fe4662232c8738b64312c725752fcab5
+- version: 2
+  date: '2026-09-15'
+  summary: Added an explicit instruction not to narrate files or materials in <execute>.
+  rationale: 'Wave 1 lesson: only materials-attached cells emitted preambles that
+    disclosed the materials condition (L-043).'
+  triggered_by: lessons-learned L-043 (exam-taker)
+  affected: all Wave 2 cells
+  template_sha256:
+    essay: e947ee8e85035795d52ed799e0828875235e3efe6575a0ad4a1a35e20f3297cf
+    mcq: f5df42165219bd03f418de6d41147cdaaaaa54f665e913a2d50466a356f169fc

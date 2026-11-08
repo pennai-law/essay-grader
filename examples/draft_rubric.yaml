@@ -1,0 +1,39 @@
+# Sample DRAFT rubric (fictional contracts question). Run:
+#   essay-grader harden --exam exam.pdf --syllabus syllabus.pdf --rubric examples/draft_rubric.yaml
+#   essay-grader lock examples/draft_rubric.yaml     # -> examples/draft_rubric.locked.yaml
+exam_id: CONTRACTS-SAMPLE
+version: 1
+policies:
+  length_policy:
+    mode: grade_first_n_words     # no_penalty | grade_first_n_words | deduct
+    word_cap: 1500
+  off_topic_policy: Ignore material unrelated to the question; do not penalize it.
+  alternative_conclusions_policy: Credit well-reasoned conclusions that differ from the model answer; grade the reasoning.
+  citation_policy: Case citations are not required; credit correct statements of the rule.
+questions:
+  - id: Q1
+    criteria:
+      - id: governing_law
+        description: Identifies that UCC Article 2 governs because the contract is for the sale of goods.
+        max_points: 1
+        kind: binary
+      - id: formation
+        description: Analyzes whether a contract was formed despite the reply changing the delivery date (UCC 2-207).
+        max_points: 4
+        kind: choice
+        levels:
+          - {label: absent, points: 0, descriptor: No analysis of formation.}
+          - {label: issue_only, points: 1, descriptor: Names the issue without applying the rule to the facts.}
+          - {label: adequate, points: 3, descriptor: Applies the rule to the facts with a reasoned conclusion.}
+          - {label: excellent, points: 4, descriptor: Also addresses expressly-conditional acceptance and the status of the new term.}
+        notes: Either conclusion earns full credit if reasoned.
+      - id: remedies
+        description: Discusses whether the buyer may reject the delivery and on what basis.
+        max_points: 3
+        kind: score
+        scale:
+          min: 0
+          max: 3
+          anchors:
+            - {value: 0, descriptor: Not discussed.}
+            - {value: 3, descriptor: Correct rule, applied to the late delivery and the price-drop motive.}

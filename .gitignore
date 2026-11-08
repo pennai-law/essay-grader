@@ -18,3 +18,17 @@ venv/
 
 # Logs
 *.log
+
+# Essay-grader: NEVER commit student data or run outputs (FERPA)
+data/
+runs/
+samples/
+answers/
+!tests/fixtures/answers/
+*.pdf
+*.docx
+.pytest_cache/
+build/
+dist/
+
+!docs/**/*.pdf

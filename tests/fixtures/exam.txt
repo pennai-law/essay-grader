@@ -1,0 +1,5 @@
+FICTIONAL PRACTICE QUESTION (Contracts) -- not a real exam.
+
+On March 1, Marlow Bakery e-mailed Quill Paper Co.: "We will buy 500 reams of recycled paper at $4 per ream, delivery by March 15. Reply to confirm." Quill replied on March 2: "Confirmed, but delivery will be March 20." Marlow said nothing. On March 20 Quill delivered 500 reams; Marlow refused them, saying the price of paper had dropped.
+
+Discuss whether a contract was formed and whether Marlow may reject the delivery. (Assume the UCC applies.)
