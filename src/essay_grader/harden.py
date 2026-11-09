@@ -17,7 +17,7 @@ from pydantic import BaseModel, Field
 
 from . import questionnaire as qmod
 from .budget import Budget, BudgetExceeded
-from .graders.claude_grader import GRADE_MAX_TOKENS, ClaudeGrader
+from .graders.claude_grader import ClaudeGrader, grade_max_tokens
 from .ingest import apply_length_policy
 from .llm import DEFAULT_CLAUDE_MODEL, SONNET_MODEL, StructuredLLM, estimate_cost
 from .prompts import (_attr, neutralize, ARCHETYPES, CRITIQUE_SYSTEM, GRADER_SYSTEM, QUESTIONNAIRE_SYSTEM, SYNTH_SYSTEM, SYNTH_USER,
@@ -164,7 +164,7 @@ def plan(exam_text: str, syllabus_text: str, rubric: Rubric, budget: Budget, cfg
         avg_words = sum(s["words"] for s in specs) / max(1, n_ans)
         grade_chars = [len(GRADER_SYSTEM) + len(exam_text) + len(render_question(rubric, q)) + int(avg_words * CHARS_PER_WORD)
                        for q in rubric.questions]
-        claude = sum(estimate_cost(p.stress_model, c, GRADE_MAX_TOKENS) for c in grade_chars) * p.claude_grades_per_question
+        claude = sum(estimate_cost(p.stress_model, c, grade_max_tokens(q)) for c, q in zip(grade_chars, rubric.questions)) * p.claude_grades_per_question
         decisions = sum(estimate_cost("gpt-6-luna", c, 0) for c in grade_chars) * len(p.archetypes) * p.k
         q_chars = (len(QUESTIONNAIRE_SYSTEM) + len(rubric_all) + len(exam_text) + 6000 + n_ans * 80 * 4
                    + int(sum(min(s["words"] * CHARS_PER_WORD, 2500) for s in specs)))

@@ -72,6 +72,15 @@ answers `medium`). Requests go through `client.beta.messages.create(..., betas=[
 grader reports as a grader error (answer goes to human review) and hardening records; no grade is ever fabricated. `messages.parse` exists in
 the installed SDK but is not used because it parses the text before the caller can inspect `stop_reason`.
 
+## Long points checklists
+
+A rubric may be an additive checklist: dozens of independently earnable `binary` criteria in one question (for example 100 available
+points where a strong class averages about 60). Claude's output limit for one answer is 4096 tokens up to 16 criteria and grows by 256
+tokens per further criterion (cap 24000; `claude_grader.grade_max_tokens`), so a long checklist is not cut off at `max_tokens`; cost
+estimates use the same numbers. Not verified against the live APIs: whether OpenAI Decisions accepts that many questions in one request.
+Because binary criteria flag on any label mismatch, most answers on a long checklist have at least one disputed point and therefore no
+suggested total; the per-criterion suggestions for the agreed points are still present in `criteria[].suggested`.
+
 ## What the AI does not do
 
 It does not finalize grades, curve, rank, or decide anything about a student. The pipeline cannot see names. Agreement
