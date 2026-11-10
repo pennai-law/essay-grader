@@ -50,6 +50,24 @@ def validate_quotes(answer: str, quotes: list[str]) -> list[str]:
 
 GRADE_MAX_TOKENS = 4096
 EXPECTED_GRADE_OUTPUT_TOKENS = 1500  # typical output size, used for whole-run estimates (per-call gates use max_tokens)
+# A points checklist can have dozens of independently earnable criteria in one question; each judgment (quote, rationale, confidence)
+# needs output room, and a response cut off at max_tokens is a grader error. Up to BASE_CRITERIA criteria the limits above are unchanged.
+BASE_CRITERIA = 16
+TOKENS_PER_CRITERION = 256
+EXPECTED_TOKENS_PER_CRITERION = 95
+GRADE_MAX_TOKENS_CEILING = 24000
+
+
+def grade_max_tokens(question: Question) -> int:
+    """Output limit for one answer: 4096 for an ordinary rubric, more for a long checklist (256 per criterion beyond 16), capped."""
+    extra = max(0, len(question.criteria) - BASE_CRITERIA)
+    return min(GRADE_MAX_TOKENS_CEILING, GRADE_MAX_TOKENS + TOKENS_PER_CRITERION * extra)
+
+
+def expected_grade_tokens(question: Question) -> int:
+    """Typical output size for one answer (whole-run estimates)."""
+    extra = max(0, len(question.criteria) - BASE_CRITERIA)
+    return min(grade_max_tokens(question), EXPECTED_GRADE_OUTPUT_TOKENS + EXPECTED_TOKENS_PER_CRITERION * extra)
 
 
 class ClaudeGrader:
@@ -76,7 +94,7 @@ class ClaudeGrader:
         """USD for one answer: input chars/4 plus typical (or, if worst_case, max) output tokens."""
         prefix, user = self._prompts(rubric, question, exam_text, answer_text)
         return estimate_cost(self.model, len(prefix) + len(user),
-                             GRADE_MAX_TOKENS if worst_case else EXPECTED_GRADE_OUTPUT_TOKENS)
+                             grade_max_tokens(question) if worst_case else expected_grade_tokens(question))
 
     async def grade(self, rubric: Rubric, question: Question, exam_text: str, answer_text: str, *,
                     budget=None) -> GraderResult:
@@ -87,7 +105,7 @@ class ClaudeGrader:
 
         async def once() -> GraderResult:
             # BudgetExceeded propagates to the caller (pipeline stops cleanly); it is not a grader error.
-            res = await self.llm.call(prefix=prefix, user=user, schema=GradeOutput, max_tokens=GRADE_MAX_TOKENS,
+            res = await self.llm.call(prefix=prefix, user=user, schema=GradeOutput, max_tokens=grade_max_tokens(question),
                                       effort="high", purpose=self.purpose, budget=budget, hint=hint)
             if not res.ok:  # e.g. refusal: structured error, never a made-up grade
                 return GraderResult(grader=self.name, model=self.model, served_model=res.served_model,
