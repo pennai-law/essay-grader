@@ -81,6 +81,13 @@ estimates use the same numbers. Not verified against the live APIs: whether Open
 Because binary criteria flag on any label mismatch, most answers on a long checklist have at least one disputed point and therefore no
 suggested total; the per-criterion suggestions for the agreed points are still present in `criteria[].suggested`.
 
+## Rubric-wide rulings reach both graders
+
+`policies.additional_rulings` (questionnaire answers at rubric level, and grading preferences written by the platform) are rendered for
+the Claude grader by `prompts.render_policies` and, since this change, also added to the OpenAI Decisions context
+(`openai_decisions_grader._context_text`, one "Rubric-wide ruling:" line each). Before, the second grader saw only the three named
+policies, so a rubric-wide ruling could be applied by one grader and not the other. A rubric with no such rulings sends the same context as before.
+
 ## What the AI does not do
 
 It does not finalize grades, curve, rank, or decide anything about a student. The pipeline cannot see names. Agreement
